@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Author: Long Chen
 
@@ -8,6 +7,9 @@ University of Science and Technology of China
 """
 
 import heapq  # 使用heapq实现优先队列
+import time
+import random
+node_count = 0
 
 class Node:
     def __init__(self, job_sequence, machine1Times, machine2Times, u, lower_bound=None, makespan=None):
@@ -23,19 +25,19 @@ class Node:
         return (self.lower_bound, self.makespan) < (other.lower_bound, other.makespan)
     
     def calculate_makespan(self):
-        _, makespan, _, _ = calculate_makespan(self.machine1Times, self.machine2Times, self.u, self.job_sequence, plot=False, return_both=True)
+        _, makespan, _, _ = calculate_makespan(self.machine1Times, self.machine2Times, self.u, self.job_sequence, return_both=True)
         return makespan
     
     def calculate_lower_bound(self):
         return lower_bound(self.machine1Times, self.machine2Times, self.u, self.job_sequence)
     
-    def eliminate_node(self):
-        heuristic_status, complete_schedule = node_elimination(self.machine1Times, self.machine2Times, self.u, self.job_sequence)
-        return heuristic_status, complete_schedule
+    def node_elimination(self):
+        return node_elimination(self.machine1Times, self.machine2Times, self.u, self.job_sequence)
 
 
-#%% 1 定义计算 makespan 的函数
-def calculate_makespan(machine1Times, machine2Times, u, order, plot=True, return_both=True):
+#%% 1 calculate makespan
+
+def calculate_makespan(machine1Times, machine2Times, u, order, return_both=True):
     
     """
     根据已知排序和有限时间约束，通过递归公式(1)来计算makespan
@@ -83,8 +85,7 @@ def calculate_makespan(machine1Times, machine2Times, u, order, plot=True, return
     else:
         return makespan2
 
-
-#%% 2 定义计算lower bound的函数
+#%% 2 Lower Bound
 def lower_bound(machine1Times, machine2Times, u, partial_schedule):
     
     """
@@ -95,7 +96,7 @@ def lower_bound(machine1Times, machine2Times, u, partial_schedule):
     
     """
     
-    makespan1, makespan2, _, _ = calculate_makespan(machine1Times, machine2Times, u, partial_schedule, plot=False, return_both=True)
+    makespan1, makespan2, _, _ = calculate_makespan(machine1Times, machine2Times, u, partial_schedule, return_both=True)
     
     partial_schedule = [x - 1 for x in partial_schedule]
     
@@ -111,7 +112,8 @@ def lower_bound(machine1Times, machine2Times, u, partial_schedule):
     return LB
 
 
-#%% 3 检查定理2和定理3的条件是否满足
+#%% 3 Theorem satisfied
+
 def is_theorem_conditions_satisfied(machine1Times, machine2Times):
     # 定理2条件：检查M2中的最大元素是否大于M1的所有元素
     theorem2_satisfied = min(machine2Times) > max(machine1Times)
@@ -125,7 +127,8 @@ def is_theorem_conditions_satisfied(machine1Times, machine2Times):
     return True
 
 
-#%% 4 约翰逊启发是算法生成初始序列
+#%% 4 Johnson Algorithm
+
 def johnson_algorithm(machine1Times, machine2Times):
     
     """ 
@@ -181,7 +184,8 @@ def johnson_algorithm(machine1Times, machine2Times):
     return order, makespan
 
 
-#%% 5 根据公式2消除节点
+#%% 5 Node elimination
+
 def node_elimination(machine1Times, machine2Times, u, partial_schedule):
     
     """
@@ -219,7 +223,7 @@ def node_elimination(machine1Times, machine2Times, u, partial_schedule):
     
     # 计算每个作业在机器1和机器2上的完成时间
     
-    _, _, completion_time_machine1, completion_time_machine2 = calculate_makespan(machine1Times, machine2Times, u, complete_schedule_1, plot=False, return_both=True)
+    _, _, completion_time_machine1, completion_time_machine2 = calculate_makespan(machine1Times, machine2Times, u, complete_schedule_1, return_both=True)
 
     # 检查公式(2)的条件
     
@@ -231,30 +235,31 @@ def node_elimination(machine1Times, machine2Times, u, partial_schedule):
     return True, complete_schedule_1
 
 
-#%% 6 生成当前节点的所有子节点
+#%% 6 create child node
+
 def create_child_nodes(node, machine1Times, machine2Times, u):
+    global node_count  # 引用全局变量
     child_nodes = []
-    # 获取尚未安排的工作
-    adjusted_sequence = [job - 1 for job in node.job_sequence]
-    remaining_jobs = [job for job in range(len(machine1Times)) if job not in adjusted_sequence]
+    remaining_jobs = [job for job in range(len(machine1Times)) if job not in node.job_sequence]
     for job in remaining_jobs:
-        new_sequence = node.job_sequence + [job + 1]  # 作业编号从1开始
+        new_sequence = node.job_sequence + [job + 1]
         new_node = Node(new_sequence, machine1Times, machine2Times, u, lower_bound=node.lower_bound)
         new_node.lower_bound = new_node.calculate_lower_bound()
         new_node.makespan = new_node.calculate_makespan()
         child_nodes.append(new_node)
-        
+        node_count += 1  # 每次创建新节点时递增计数器
     return child_nodes
 
 
-#%% 7 B&B算法执行
+#%% 7 B&B main code
+
 def branch_and_bound_algorithm(machine1Times, machine2Times, u):
     
-    # n = len(machine1Times)  
+    n = len(machine1Times)  
     # 初始化
     root = Node([], machine1Times, machine2Times, u)
     queue = [root]  # 使用列表作为优先队列
-    best_solution = None
+    best_solution = []
     U = float('inf')  # 最优解初始化为无穷大
     
     # 如果定理2和定理3成立，则可以直接输出最优解
@@ -262,37 +267,56 @@ def branch_and_bound_algorithm(machine1Times, machine2Times, u):
         best_solution, U = johnson_algorithm(machine1Times, machine2Times)
     
     else:
-        while queue:
+        initial_sequence, _ = johnson_algorithm(machine1Times, machine2Times)
+        U = calculate_makespan(machine1Times, machine2Times, u, initial_sequence, return_both=False)
+        
+        while queue and len(best_solution) < n:
             node = heapq.heappop(queue)  # 弹出下界最小的节点
             
             # 计算下界
             if node.job_sequence:
-                node.lower_bound = node.calculate_lower_bound()            
+                node.lower_bound = node.calculate_lower_bound() 
 
             # 剪枝
-            if node.lower_bound <= U:
+            if node.lower_bound >= U:
                 continue
             
-            heuristic_status, complete_schedule = node.eliminate_node()
+            heuristic_status, complete_schedule = node.node_elimination()
             if heuristic_status:
                 best_solution = complete_schedule
-                U = calculate_makespan(machine1Times, machine2Times, u, complete_schedule, plot=False, return_both=False)
+                U = calculate_makespan(machine1Times, machine2Times, u, complete_schedule, return_both=False)
             
             else:
                 for child in create_child_nodes(node, machine1Times, machine2Times, u):
                     heapq.heappush(queue, child)
+                    
+                # min_makespan_node = heapq.heappop(queue) # 这句也有很大问题
+                # U = min_makespan_node.lower_bound  # 这句有问题
+                # best_solution = min_makespan_node.job_sequence
 
     return best_solution, U
 
 
-#%% 8 算例测试
-# 假设有5个作业
+
+#%% test data
+#%%% test data 1
 machine1Times = [18, 10, 17, 12, 16]
 machine2Times = [14, 19, 15, 14, 16]
 u = [2, 4, 0, 4, 3]
 
+#%%% test data 2
+machine1Times = [random.randint(10, 20) for _ in range(30)]
+machine2Times = [random.randint(10, 20) for _ in range(30)]
+u = [random.randint(0, 10) for _ in range(30)]
+
+start_time = time.time()
+
 best_solution, optimal_makespan = branch_and_bound_algorithm(machine1Times, machine2Times, u)
+
+end_time = time.time()  
+elapsed_time = end_time - start_time  
+
+print(f"Elapsed time: {elapsed_time} seconds")
 print(f"Optimal makespan: {optimal_makespan}")
-print(f"Optimal job sequence: {best_solution.job_sequence if best_solution else 'No solution found'}")
-
-
+print(f"Optimal job sequence: {best_solution}")
+print(f"Total nodes generated: {node_count}")
