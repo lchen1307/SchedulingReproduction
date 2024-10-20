@@ -76,20 +76,20 @@ def plot_gantt_chart(tasks, job_colors=None, machine_labels=None, title='Gantt C
 
 # Example usage of the function
 
-tasks = [
-    (1, 1, 0, 2),
-    (1, 2, 2, 5),
-    (2, 1, 4, 7),
-    (2, 2, 7, 9)
-]
-
-job_colors = {
-    1: '#72c3a3',  # Color for Job 1
-    2: '#a5c2e2',  # Color for Job 2
-}
-
-machine_labels = {1: 'Machine 1', 2: 'Machine 2'}
-
-# Call the function to plot the Gantt chart
-plot_gantt_chart(tasks, job_colors=job_colors, machine_labels=machine_labels, title='Gantt Chart Example',
-                 save_path='gantt_chart_example.png')
+# tasks = [
+#     (1, 1, 0, 2),
+#     (1, 2, 2, 5),
+#     (2, 1, 4, 7),
+#     (2, 2, 7, 9)
+# ]
+#
+# job_colors = {
+#     1: '#72c3a3',  # Color for Job 1
+#     2: '#a5c2e2',  # Color for Job 2
+# }
+#
+# machine_labels = {1: 'Machine 1', 2: 'Machine 2'}
+#
+# # Call the function to plot the Gantt chart
+# plot_gantt_chart(tasks, job_colors=job_colors, machine_labels=machine_labels, title='Gantt Chart Example',
+#                  save_path='gantt_chart_example.png')
