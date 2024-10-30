@@ -101,12 +101,12 @@ def johnson_algorithm(machine1Times, machine2Times, plot=True):
     
     return job_sequence, makespan, order
 
-# # 示例输入
-# machine1Times = [18, 10, 17, 12, 16]
-# machine2Times = [14, 19, 15, 14, 16]
+# 示例输入
+machine1Times = [18, 10, 17, 12, 16]
+machine2Times = [14, 19, 15, 14, 16]
 
-# # 调用函数
-# optimal_order, min_makespan = johnson_algorithm(machine1Times, machine2Times)
+# 调用函数
+optimal_order, min_makespan = johnson_algorithm(machine1Times, machine2Times)
 
-# print("最优加工次序:", optimal_order)
-# print("最小makespan:", min_makespan)
+print("最优加工次序:", optimal_order)
+print("最小makespan:", min_makespan)
