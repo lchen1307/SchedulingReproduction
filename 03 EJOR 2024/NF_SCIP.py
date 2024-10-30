@@ -19,17 +19,16 @@ setup_time = [
     [8, 1, 5, 7, 0]
 ]
 
-# 定义四类边
-s_ij_bar = [None] * jobs
-for j in range(jobs):
-    s_ij_values = [setup_time[i][j] for i in range(jobs + 1) if i != (j + 1)]
-    s_ij_bar[j] = min(s_ij_values)
+# 定义 s_ij_bar
+s_ij_bar = [min([setup_time[i][j] for i in range(jobs + 1) if i != j]) for j in range(jobs)]
 
+# 定义节点集 V
 R = [(j + 1, t + s_ij_bar[j] + release_dates[j] + processing_times[j]) for j in range(jobs) \
      for t in range(T + 1 - (s_ij_bar[j] + release_dates[j] + processing_times[j]))]
 O = [(0, t) for t in range(T + 1)]
 V = R + O
 
+# 定义弧集 A
 A1 = [((i, t), (j, t + setup_time[i][j - 1] + processing_times[j - 1])) \
       for (i, t) in R
       for (j, t_next) in R
@@ -41,41 +40,39 @@ A2 = [((0, t), (j + 1, t + setup_time[0][j] + processing_times[j]))
 A3 = [((j, t), (0, T)) for (j, t) in R]
 A4 = [((j, t), (j, t + 1)) for (j, t) in V if (j, t + 1) in V]
 
-
-# 建立模型并调用SCIP求解
+# 建立模型
 model = Model('Single Machine Scheduling Problem')
 
 # 决策变量
 arc_vars = {a: model.addVar(vtype='B', name=f'x_{a[0][0]} + {a[0][1]} + {a[1][0]} + {a[1][1]}')
             for a in A1 + A2 + A3 + A4}
 
-# 目标函数
-alpha = model.addVar(vtype = 'C', name = 'alpha')
+# 目标变量
+alpha = model.addVar(vtype='C', name='alpha')
 model.setObjective(alpha)
 
-# 约束条件1：所有工件都只需被加工一次
+# 约束1：每个工件只能安排一次
 for j in range(1, jobs + 1):
-    A_j_edges = [((i, t), (j, t_next)) for ((i, t), (j, t_next)) in (A1 + A2 + A3)\
-                 if t_next == t + setup_time[i][j-1] + processing_times[j-1] and i != j]
+    A_j_edges = [((i, t), (j, t_next)) for ((i, t), (j, t_next)) in (A1 + A2 + A3) if i != j]
     model.addCons(quicksum(arc_vars[(i, t), (j, t_next)] for ((i, t), (j, t_next)) in A_j_edges) == 1)
 
-# 约束条件2：dummy job -> first job
-model.addCons(quicksum(arc_vars[(0, t), (j, t_next)] for ((start, t), (j, t_next)) in A2
-                       if start == 0) == 1)
+# 约束2：dummy job 到第一个作业的约束
+model.addCons(quicksum(arc_vars[(0, t), (j, t_next)] for ((start, t), (j, t_next)) in A2 if start == 0) == 1)
 
-# 约束条件3：流平衡约束
+# 约束3：流平衡约束
 for v in V:
     in_edges = [((i, t), v) for ((i, t), (j, t_next)) in A1 + A2 + A3 + A4 if (j, t_next) == v]
     out_edges = [(v, (j, t_next)) for ((i, t), (j, t_next)) in A1 + A2 + A3 + A4 if (i, t) == v]
     model.addCons(quicksum(arc_vars[edge] for edge in in_edges) ==
                   quicksum(arc_vars[edge] for edge in out_edges))
 
-# 约束条件4：makespan
+# 约束4：makespan约束
 for (j, t) in R:
-    model.addCons(alpha >= t * quicksum(arc_vars[((i, t), (j, t_next))] for ((i, t), (j, t_next)) in A3))
+    model.addCons(alpha >= t, f"makespan_{j}_{t}")
 
-# 模型求解并输出结果
+# 求解
 model.writeProblem("model.lp", "", True, True)
+model.conflictAnalyze()
 result = model.optimize()
 
 if model.getStatus() == "optimal":
