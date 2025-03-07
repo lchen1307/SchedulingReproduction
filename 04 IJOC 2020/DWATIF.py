@@ -31,6 +31,7 @@ class PMATIF:
 
         # initialize the network graph
         self.graph = []
+        self.Paths = {}
 
         # initialize parameters
         self.Iter = 0
@@ -57,32 +58,40 @@ class PMATIF:
             self.DueDate = [job.due_date for job in jobs]
             self.DueDate = [0] + self.DueDate
 
-    def NetworkShortestPath(self, arc_reduced_cost = None):
+    def NetworkShortestPath(self):
 
         # 创建网络图、寻找最短路
-        G = nx.DiGraph
-        if arc_reduced_cost is None:
-            arc_reduced_cost = {}
+        G = nx.DiGraph()
+
+        for i in range(self.NumJob + 1):
+            for t in range(self.T + 1):
+                node = (i, t)
+                G.add_node(node)
 
         for i in range(self.NumJob + 1):
             for j in range(self.NumJob + 1):
                 for t in self.var_x[i][j].keys():
-                    node = (i, j, t)
-                    G.add_node(node)
-
-                    if (i == 0) & (j == 0):
-                        G.add_edge(node, node, weight = arc_reduced_cost.get((i, j, t), 1))
-                    else:
-                        next_node = (j, i, t + 1)
-                        G.add_edge(node, next_node, weight = arc_reduced_cost.get((i, j, t), 1))
+                    arc_reduced_cost = self.Weight[j] * (t + self.ProcessingTime[j])
+                    G.add_edge((i, t - self.ProcessingTime[i]), (j, t), weight = arc_reduced_cost)
 
         self.graph = G
 
-        start_node = (0, 0, 0)
-        end_node = (0, 0, self.T)
+        start_node = (0, 0)
+        end_node = (0, self.T)
         shortest_path_length = nx.dijkstra_path_length(G, source=start_node, target=end_node)
+        shortest_path = nx.dijkstra_path(G, source=start_node, target=end_node)
 
-        return shortest_path_length
+        arcs = []
+        for i in range(len(shortest_path) - 1):
+            start = shortest_path[i]
+            end = shortest_path[i + 1]
+            arc = f'x_{start[0]}_{end[0]}_{end[1]}'
+            arcs.append(arc)
+
+        key = f'lam_phase_1_{self.Iter}'
+        self.Paths[key] = arcs
+
+        return shortest_path_length, shortest_path
 
     def initializeModel(self):
         # 主问题的初始化没什么问题
@@ -262,7 +271,8 @@ class PMATIF:
         while True:
             print('Iter: ', self.Iter)
             self.RDWM.write('DWATIF_master.lp')
-            self.subProblem.optimize()
+            # self.subProblem.optimize()
+            shortest_path_length, shortest_path = self.NetworkShortestPath()
 
             if self.subProblem.objval >= -1e-6:
                 print('No new column will be generated, coz no negative reduced cost columns')
