@@ -5,7 +5,7 @@
 """
 
 from __future__ import division, print_function
-from DataClass import DataReader
+# from DataClass import DataReader
 import networkx as nx
 from gurobipy import *
 import math
@@ -100,7 +100,7 @@ class PMATIF:
         self.subProblem = Model('subProblem')
 
         # close log information
-        self.RDWM.setParam('OutputFlag', 0)
+        # self.RDWM.setParam('OutputFlag', 0)
         self.subProblem.setParam('OutputFlag', 0)
 
         # add initial artificial variable in RDWMP, in order to start the algorithm
@@ -116,10 +116,10 @@ class PMATIF:
         AssignmentCons_temp = []
         for i in range(self.NumJob):
             AssignmentCons_temp.append(self.RDWM.addConstr(-self.var_Artificial == 1, name = 'Assignment Cons'))
-        self.AssignmentCons.append(AssignmentCons_temp)
+        self.AssignmentCons.extend(AssignmentCons_temp)
 
         # initialize the convex combination constraints
-        self.convexCons = self.RDWM.addConstr(1 * self.var_Artificial == 1, name = 'convex cons')
+        self.convexCons = self.RDWM.addConstr(1 * self.var_Artificial == 1, name = 'Convex Cons')
 
         self.RDWM.write('initial_RDWM.lp')
 
@@ -271,12 +271,11 @@ class PMATIF:
         while True:
             print('Iter: ', self.Iter)
             self.RDWM.write('DWATIF_master.lp')
-            # self.subProblem.optimize()
+            self.subProblem.optimize()
             shortest_path_length, shortest_path = self.NetworkShortestPath()
 
-            if self.subProblem.objval >= -1e-6:
+            if self.subProblem.ObjVal >= -1e-6:
                 print('No new column will be generated, coz no negative reduced cost columns')
-                break
             else:
                 self.Iter = self.Iter + 1
 
@@ -288,16 +287,35 @@ class PMATIF:
                 # update constraints in RDWM
                 col = Column()
                 for j in range(self.NumJob):
-                    col.addTerms(sum(self.var_x[j].x))
+                    count = 0
+                    # 遍历路径p中的所有弧
+                    for arc in self.Paths[f'lam_phase_1_{self.Iter-1}']:
+                        # 解析弧的格式，假设弧的格式为 'x_i_j_t'
+                        parts = arc.split('_')
+                        if len(parts) == 4 and parts[0] == 'x':
+                            current_j = int(parts[2])
+                            if current_j == j:
+                                count += 1
+                    # 将计数添加到列的约束系数中
+                    col.addTerms(count, self.AssignmentCons[j])
 
-                col.addTerms(1, self.convexCons)
+                count = 0
+                for arc in self.Paths[f'lam_phase_1_{self.Iter-1}']:
+                    parts = arc.split('_')
+                    if len(parts) == 4 and parts[0] == 'x':
+                        if parts[1] == '0' and parts[3] == '0':
+                            count += 1
+                col.addTerms([count], self.CapacityCons)
+
+                col.addTerms(1.0, self.convexCons)
 
                 self.var_lambda.append(self.RDWM.addVar(lb = 0.0
                                                        , ub = GRB.INFINITY
-                                                       , obj = 0.0
+                                                       , obj =0.0
                                                        , vtype = GRB.CONTINUOUS
-                                                       , name = 'lam_phase_1_' + str(self.Iter)
+                                                       , name = 'lam_phase1_' + str(self.Iter-1)
                                                        , column = col))
+
                 self.RDWM.optimize()
 
                 # update dual variables
@@ -308,12 +326,12 @@ class PMATIF:
                     for i in range(self.NumJob):
                         self.dual_AssignmentCons = self.AssignmentCons[j].pi
                     self.dual_CapacityCons = self.convexCons.pi
-
-                # reset objective for subproblem in phase 1
-                obj_sub_phase_1 = - quicksum(self.dual_AssignmentCons[j] - self.var_x[j] \
-                                             for j in range(self.NumJob)) - self.dual_convexCons
-
-                self.subProblem.setObjective(obj_sub_phase_1, GRB.MINIMIZE)
+                #
+                # # reset objective for subproblem in phase 1
+                # obj_sub_phase_1 = - quicksum(self.dual_AssignmentCons[j] - self.var_x[j] \
+                #                              for j in range(self.NumJob)) - self.dual_convexCons
+                #
+                # self.subProblem.setObjective(obj_sub_phase_1, GRB.MINIMIZE)
 
 
 

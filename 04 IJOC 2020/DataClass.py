@@ -69,7 +69,7 @@ class DataReader:
 
         return data_groups
 
-path = r'../Dataset/wt100.txt'
-data_groups = DataReader.readData(path, job_count = 100)
+path = r'../Dataset/wt40.txt'
+data_groups = DataReader.readData(path, job_count = 40)
 for group in data_groups:
     print(group)
