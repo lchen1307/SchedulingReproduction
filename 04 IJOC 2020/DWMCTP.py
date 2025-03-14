@@ -224,6 +224,7 @@ class MCTP:
                                                        , column = col))
 
                 # solve RMP of Phase 1
+                self.RMP.write(f'thisissohardforme{self.Iter}.lp')
                 self.RMP.optimize()
 
                 # update dual variables

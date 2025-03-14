@@ -5,9 +5,10 @@
 """
 
 from __future__ import division, print_function
-# from DataClass import DataReader
-import networkx as nx
+from collections import defaultdict
+from DataClass import DataReader
 from gurobipy import *
+import networkx as nx
 import math
 
 class PMATIF:
@@ -39,6 +40,7 @@ class PMATIF:
         self.dual_CapacityCons = []
         self.dual_AssignmentCons = []
         self.SP_totalCost = []
+        self.reduced_dual = [] # 最短路问题权重的中间变量参数
 
     def readData(self, path, job_count, machine_count):
         data_groups = DataReader.readData(path, job_count)
@@ -57,6 +59,52 @@ class PMATIF:
             self.Weight = [0] + self.Weight
             self.DueDate = [job.due_date for job in jobs]
             self.DueDate = [0] + self.DueDate
+
+    def GreedyRule(self):
+
+        sorted_indices = sorted(range(self.NumJob), key=lambda x: self.Weight[x] / self.ProcessingTime[x], reverse=True)
+        # sorted_indices = sorted(range(self.NumJob), key = lambda x: self.ProcessingTime[x]) # SPT 最短加工时间优先规则
+        # sorted_indices = sorted(range(self.NumJob), key=lambda x: self.DueDate[x]) # EDD 最早交货期优先规则
+        # sorted_indices = sorted(range(self.NumJob), key=lambda x: -self.Weight[x]) # 最大权重优先规则
+
+        machine_completion_times = [0] * self.NumMachine
+        assignment = [[] for _ in range(self.NumMachine)]
+
+        for job_idx in sorted_indices:
+            selected_machine = min(range(self.NumMachine), key = lambda m: machine_completion_times[m])
+            assignment[selected_machine].append(job_idx)
+            machine_completion_times[selected_machine] += self.ProcessingTime[job_idx]
+
+        # 计算加权总完工时间
+        total_weighted_completion_time = 0
+        start_times = []
+        for m in range(self.NumMachine):
+            start_time = 0
+            machine_start_times = []
+            for job_idx in assignment[m]:
+                machine_start_times.append((job_idx, start_time))
+                start_time += self.ProcessingTime[job_idx]
+            start_times.append(machine_start_times)
+
+        for m in range(self.NumMachine):
+            lambda_key = f"lambda_{m+1}"  # 机器编号从1开始
+            path = []
+            # 在路径开头添加0
+            prev_job = 0
+            for job_idx, start_time in start_times[m]:
+                # 作业编号从1开始
+                current_job = job_idx + 1
+                path.append(f"x_{prev_job}_{current_job}_{start_time}")
+                prev_job = current_job
+            # 在路径结尾添加0，开始时间为机器的完成时间
+            path.append(f"x_{prev_job}_0_{machine_completion_times[m]}")
+            self.Paths[lambda_key] = path
+
+            assignment_output = []
+            for m in range(self.NumMachine):
+                # 机器编号从1开始，作业编号从1开始
+                assignment_output.append([job_idx + 1 for job_idx in assignment[m]])
+
 
     def NetworkShortestPath(self):
 
@@ -93,14 +141,111 @@ class PMATIF:
 
         return shortest_path_length, shortest_path
 
+    def YenKShortestPaths(self, k):
+
+        # 创建网络图
+        G = nx.DiGraph()
+
+        for i in range(self.NumJob + 1):
+            for t in range(self.T + 1):
+                node = (i, t)
+                G.add_node(node)
+
+        for i in range(self.NumJob + 1):
+            for j in range(self.NumJob + 1):
+                for t in self.var_x[i][j].keys():
+                    arc_reduced_cost = self.Weight[j] * (t + self.ProcessingTime[j])
+                    G.add_edge((i, t - self.ProcessingTime[i]), (j, t), weight=arc_reduced_cost)
+
+        self.graph = G
+
+        start_node = (0, 0)
+        end_node = (0, self.T)
+
+        paths = list(nx.shortest_simple_paths(G, start_node, end_node, weight='weight'))
+
+        if len(paths) < k:
+            k = len(paths)
+
+        for idx in range(k):
+            path = paths[idx]
+
+            arcs = []
+            for i in range(len(path) - 1):
+                start = path[i]
+                end = path[i + 1]
+                arc = f'x_{start[0]}_{end[0]}_{end[1]}'
+                arcs.append(arc)
+
+            ##################################
+
+            key = f'lambda_{idx+3}'
+            self.Paths[key] = arcs
+
+    def updatePaths(self):
+        for path_key in list(self.Paths.keys()):
+            arcs = self.Paths[path_key]
+            last_arc = arcs[-1]
+            parts = last_arc.split('_')
+            if len(parts) != 4 or parts[0] != 'x':
+                print(f"Invalid format for arc: {last_arc}")
+                continue
+            last_time = int(parts[3])
+
+            if last_time < self.T:
+                new_arcs = []
+                for t in range(last_time + 1, self.T + 1):
+                    new_arc = f"x_0_0_{t}"
+                    new_arcs.append(new_arc)
+
+                self.Paths[path_key] = arcs + new_arcs
+
+    def updateReducedDual(self):
+        self.reduced_dual = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(int))))
+
+        for l, constr in enumerate(self.RDWM.getConstrs()):
+            expr = self.RDWM.getRow(constr)
+            # 遍历线性表达式的每一项
+            for i in range(expr.size()):
+                var = expr.getVar(i)  # 获取第 i 个变量
+                coeff = expr.getCoeff(i)  # 获取第 i 个系数（如果需要）
+                var_name = var.VarName
+                if var_name.startswith('lambda_'):
+                    lambda_index = int(var_name.split('_')[1])
+                    if f'lambda_{lambda_index}' in self.Paths:
+                        x_list = self.Paths[f'lambda_{lambda_index}']
+                        for x in x_list:
+                            x_parts = x.split('_')
+                            if len(x_parts) == 4 and x_parts[0] == 'x':
+                                i = int(x_parts[1])
+                                j = int(x_parts[2])
+                                t = int(x_parts[3])
+                                self.reduced_dual[i][j][t][l] = 1
+
+# 帮我写一个函数def updateReducedDual(self)来计算reduced_dual并将其更新到self.reduced_dual中。具体计算要求为：
+# reduced_dual有四个索引，分别是i, j, t, l. i和j是从0到self.NumJob，t的索引可能是任意的整数（最大不超过self.T）,
+# l的索引取决于数学模型的约束数。首先，进入到数学模型self.RDWM中，每个约束条件代表一个索引l，第一个约束索引为0. 然后，
+# 对于每个约束，其具体形式为：lambda_1 + lambda_2 + lambda_3 + lambda_4 + lambda_5
+#    + lambda_6 + lambda_7 = 2，需要提取每个决策变量。对于每个决策变量，如lambda_1，需要在self.Paths这个字典中
+#    找到key为lambda_1的value列表，列表是形式为['x_0_1_0', 'x_0_2_0', 'x_0_3_0']，然后把列表中每个元素的数字
+#    提取出来，在这个例子中，由于有x_0_1_0，表示x_i_j_t，那么更新到reduced_dual中就是reduced_dual[0][1][0][1]
+#    为1（reduced_dual[i][j][t][l]）。值得注意的是，对于这个l, 对应的每个lambda中的每个x都需要遍历计算，只要存在
+#    对应的x就是1，不存在就是0
+
     def initializeModel(self):
-        # 主问题的初始化没什么问题
+
+        self.GreedyRule()
+
+        self.ProcessingTime = [0] + self.ProcessingTime
+        self.DueDate = [0] + self.DueDate
+        self.Weight = [0] + self.Weight
+
         # initialize master problem and subproblem
         self.RDWM = Model('RDWM')
         self.subProblem = Model('subProblem')
 
         # close log information
-        # self.RDWM.setParam('OutputFlag', 0)
+        self.RDWM.setParam('OutputFlag', 0)
         self.subProblem.setParam('OutputFlag', 0)
 
         # add initial artificial variable in RDWMP, in order to start the algorithm
@@ -170,76 +315,6 @@ class PMATIF:
         self.RDWM.write('initial_ATIFRDWM.lp')
         self.subProblem.write('initial_ATIFsubProblem.lp')
 
-        def update_subproblem_objective(self, dual_pi, dual_wj):
-            """更新定价子问题的目标函数"""
-            # 获取弧时间索引变量
-            var_x = self.var_x
-
-            # 初始化目标函数
-            objective = LinExpr()
-
-            # 遍历所有可能的弧 (i, j) t
-            for i in range(self.NumJob + 1):
-                for j in range(self.NumJob + 1):
-                    if i == j:
-                        continue
-                    for t in var_x[i][j]:
-                        var = var_x[i][j][t]
-
-                        # 假设目标函数是基于 j 的完成时间和权重
-                        completion_time = t + self.ProcessingTime[j]
-                        cost = self.Weight[j] * completion_time  # 完成成本
-
-                        # 计算影子成本
-                        # 假设 dual_pi 是容量约束的对偶变量，但在这里可能不适用
-                        # 主要的对偶变量应该是任务分配约束的对偶变量
-                        # 对于任务 j 的分配，假设每个任务 j 的对偶变量是 dual_wj[j]
-                        reduced_cost = cost - dual_wj[j]  # 假设每个任务 j 有一个对偶变量
-
-                        # 更新目标函数
-                        objective += reduced_cost * var
-
-            # 设置目标函数
-            self.subProblem.setObjective(objective, GRB.MINIMIZE)
-
-        def optimizePhase_1(self):
-            # 初始化参数
-            self.dual_CapacityCons.append([0.0])
-            self.dual_AssignmentCons = []  # 存储任务分配约束的对偶变量
-
-            # 添加人工变量的约束
-            self.CapacityCons.append(self.RDWM.addConstr(self.var_Artificial == self.NumMachine, name='Capacity Cons'))
-
-            # 添加任务分配约束
-            for j in range(1, self.NumJob + 1):
-                AssignmentCons_j = []
-                for _ in range(1):  # 只有一个约束，因此只添加一次
-                    # 此处应根据论文中的约束形式正确添加
-                    pass
-                self.AssignmentCons.append(AssignmentCons_j)
-
-            # 优化主问题
-            self.RDWM.setObjective(self.var_Artificial, GRB.MINIMIZE)
-            self.RDWM.optimize()
-
-            # 获取对偶变量
-            dual_pi = self.RDWM.getAttr(GRB.Attr.Pi, self.CapacityCons)
-            dual_wj = self.RDWM.getAttr(GRB.Attr.Pi, self.AssignmentCons)
-
-            # 更新子问题的目标函数
-            self.update_subproblem_objective(dual_pi[0][0], dual_wj.flatten().tolist())
-
-            # 优化子问题
-            self.subProblem.optimize()
-
-            # 输出结果
-            print("Subproblem Objective Value:", self.subProblem.objVal)
-            for i in range(self.NumJob + 1):
-                for j in range(self.NumJob + 1):
-                    for t in self.var_x[i][j]:
-                        var = self.var_x[i][j][t]
-                        if var.x > 0:
-                            print(f"x[{i}, {j}, {t}] = {var.x}")
 
 
     def optimizePhase_1(self):
@@ -272,7 +347,9 @@ class PMATIF:
             print('Iter: ', self.Iter)
             self.RDWM.write('DWATIF_master.lp')
             self.subProblem.optimize()
-            shortest_path_length, shortest_path = self.NetworkShortestPath()
+            # shortest_path_length, shortest_path = self.NetworkShortestPath()
+            self.YenKShortestPaths(5)
+            self.updatePaths()
 
             if self.subProblem.ObjVal >= -1e-6:
                 print('No new column will be generated, coz no negative reduced cost columns')
@@ -285,41 +362,82 @@ class PMATIF:
                 # self.SP_totalCost.append(totalCost_subProblem)
 
                 # update constraints in RDWM
-                col = Column()
-                for j in range(self.NumJob):
+                # 遍历 self.Paths 中的所有路径
+                for path_key, arcs in self.Paths.items():
+                    # 创建一个新的列
+                    col = Column()
+
+                    # 计算每个约束的系数
+                    for j in range(self.NumJob):
+                        count = 0
+                        for arc in arcs:
+                            parts = arc.split('_')
+                            if len(parts) == 4 and parts[0] == 'x':
+                                current_j = int(parts[2])
+                                if current_j == (j + 1):
+                                    count += 1
+                        col.addTerms(count, self.AssignmentCons[j])
+
+                    # 计算容量约束的系数
                     count = 0
-                    # 遍历路径p中的所有弧
-                    for arc in self.Paths[f'lam_phase_1_{self.Iter-1}']:
-                        # 解析弧的格式，假设弧的格式为 'x_i_j_t'
+                    for arc in arcs:
+                        parts = arc.split('_')
+                        if len(parts) == 4 and parts[0] == 'x':
+                            if parts[1] == '0' and parts[3] == '0':
+                                count += 1
+                    col.addTerms([count], self.CapacityCons)
+
+                    # 添加凸组合约束的系数
+                    col.addTerms(1.0, self.convexCons)
+
+                    # 目标函数的系数
+                    total_cost = 0
+                    for arc in arcs:
                         parts = arc.split('_')
                         if len(parts) == 4 and parts[0] == 'x':
                             current_j = int(parts[2])
-                            if current_j == j:
-                                count += 1
-                    # 将计数添加到列的约束系数中
-                    col.addTerms(count, self.AssignmentCons[j])
+                            current_time = int(parts[3])
 
-                count = 0
-                for arc in self.Paths[f'lam_phase_1_{self.Iter-1}']:
-                    parts = arc.split('_')
-                    if len(parts) == 4 and parts[0] == 'x':
-                        if parts[1] == '0' and parts[3] == '0':
-                            count += 1
-                col.addTerms([count], self.CapacityCons)
+                        total_cost += self.Weight[current_j] * (current_time + self.ProcessingTime[current_j])
 
-                col.addTerms(1.0, self.convexCons)
+                    # 创建一个新的变量并添加到主问题中
+                    new_var = self.RDWM.addVar(
+                        lb=0.0,
+                        ub=GRB.INFINITY,
+                        obj=total_cost,
+                        vtype=GRB.CONTINUOUS,
+                        name=f'{path_key}',
+                        column=col
+                    )
+                    self.var_lambda.append(new_var)
 
-                self.var_lambda.append(self.RDWM.addVar(lb = 0.0
-                                                       , ub = GRB.INFINITY
-                                                       , obj =0.0
-                                                       , vtype = GRB.CONTINUOUS
-                                                       , name = 'lam_phase1_' + str(self.Iter-1)
-                                                       , column = col))
+                artificial_var = None
+                for var in self.RDWM.getVars():
+                    if var.VarName == "Artificial":
+                        artificial_var = var
+                        break
+
+                if artificial_var is not None:
+                    # 删除目标函数中与 Artificial 相关的部分
+                    self.RDWM.remove(artificial_var)
+                    self.RDWM.update()
+
+                # 删除约束条件 Convenx_Cons
+                convex_cons = None
+                for constr in self.RDWM.getConstrs():
+                    if constr.ConstrName == "Convex_Cons":
+                        convex_cons = constr
+                        break
+
+                if convex_cons is not None:
+                    self.RDWM.remove(convex_cons)
+                    self.RDWM.update()
 
                 self.RDWM.optimize()
+                self.updateReducedDual()
 
                 # update dual variables
-                if self.RDWM.objval <= -1e-6:
+                if self.RDWM.ObjVal <= -1e-6:
                     print('--- obj of phase 1 reaches 0, phase 1 ends ---')
                     break
                 else:
@@ -353,10 +471,16 @@ if __name__ == '__main__' :
     # PMATIF_instance.readData(r'../Dataset/wt40.txt', job_count = 40, machine_count = 2)
     PMATIF_instance.NumJob = 5
     PMATIF_instance.NumMachine = 2
-    PMATIF_instance.ProcessingTime = [0, 6, 4, 3, 6, 5]
-    PMATIF_instance.Weight = [0, 1, 1, 1, 1, 1]
-    PMATIF_instance.DueDate = [0, 20, 18, 17, 16, 15, 14, 13]
+    PMATIF_instance.ProcessingTime = [6, 4, 3, 6, 5]
+    PMATIF_instance.Weight = [1, 1, 1, 1, 1]
+    PMATIF_instance.DueDate = [20, 18, 17, 16, 15, 14, 13]
     PMATIF_instance.T = sum(sorted(PMATIF_instance.ProcessingTime, reverse=True)[
                             :math.ceil(PMATIF_instance.NumJob / PMATIF_instance.NumMachine)])
     PMATIF_instance.solvePMATIF()
 
+
+# 3.11在完成self.Paths的更新后，新建一个函数，完成两件事
+#   ①对于正常计算加工时间，需要把最后一个节点延长到(0,T)
+#   ②对于最短路算法计算的路径，最后的节点需要向前推加工时间
+# 3.11另一个更重要的工作：检查向主问题添加列的系数计算是否正确！！！大概率主问题不可行的原因就出在这里
+# 3.12要做的事情：学习子问题的目标函数是如何更新的，然后把这个逻辑纳入到代码中

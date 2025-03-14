@@ -9,6 +9,6 @@ Subject To
  Assignment_Cons: - Artificial = 1
  Assignment_Cons: - Artificial = 1
  Assignment_Cons: - Artificial = 1
- convex_cons: = 1
+ Convex_Cons: = 1
 Bounds
 End
